@@ -1,0 +1,220 @@
+---
+title: " "
+author: " "
+date: " "
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+```
+
+<!-- Note:   -->
+
+<!-- These instructions are commented out and will not display when you knit your RMarkdown document. -->
+
+<!-- - Change the information in the yaml header above:  title, author, data. -->
+<!-- - Make sure output is html_document. -->
+<!-- - Once you are finished coding, **run each chunk individually to make sure there are no errors**.  (If necessary fix your code.) Once your code is error-free, click "knit" on the menu above. Your document should compile to HTML, provided that you have output set to "html_document." -->
+<!-- - In the code chunk above ("setup") echo is set to TRUE.  This means that the code in your chunks will be displayed, along with the results, in your compiled document. -->
+
+## Introduction
+
+This case gives you practice fitting and interpreting a logistic regression model using caret.
+
+## Terminology Review
+
+- **Overfitting**. A model overfits the data sample on which it was trained when it learns patterns that are idiosyncratic to the sample and do not exist in the population.  Such a model will not perform well with a new sample of data.
+
+- **In-sample performance**:  The model's performance on the data that was used to train it. Example: using summary() on a model provides the *in-sample* performance metrics.
+
+- **Out-of-sample performance**:  The model's performance with new data.  We are often in the position of having to estimate out-of-sample performance, which we do with cross-validation.
+
+- **Cross-validation**:  A technique for using the training data to choose hyperparameters (like k in KNN classification, or alpha/lambda in glmnet) and to estimate how a model will perform on new data.  Caret performs cross-validation automatically and reports the results to the screen. Cross-validation consists in splitting the data into, say, 10 "folds" then repeatedly training a model on 9 of the folds and testing it on the 10th, and then averaging the 10 performance metrics. It is that average that caret prints to the screen after fitting a model.
+
+## Load data and packages
+
+
+```{r}
+library(tidyverse)
+library(caret)
+
+bi <- read.csv("bioimplants.csv") # In this case make sure to use read.csv()
+
+summary(bi)
+
+glimpse(bi)
+
+
+```
+
+## Questions
+
+Lightly comment your code and use pipes for readability.
+
+Comment briefly on each of the questions, as directed.  Only the the final question requires a lengthier response.
+
+### Q1
+
+What is the attrition rate for employees at BI?  (A rate, remember, is expressed as a proportion.)
+
+1. Calculate overall attrition rate. 
+
+2. Create a summary table of conditional attrition rates by department and job role. (The table should have 3 columns:  department, job role, and the calculated conditional attrition rate.)  Sort this table by attrition rate in descending order. 
+
+Note: The simplest possible classification model would be to use the attrition majority class---"Yes" or "No"---as the prediction. This is called "majority class" prediction. The in-sample accuracy of the majority class model is simply the proportion of the majority class. This is an important performance benchmark.
+
+
+```{r}
+bi_clean <- bi %>%
+  mutate(attrition = factor(attrition, levels = c("No", "Yes"))) %>%
+  mutate(over_time = factor(over_time, levels = c("No", "Yes")))
+
+#1.
+
+bi_clean %>% 
+  summarize(attrition= mean(attrition=="Yes"))
+
+#2.
+
+bi_clean %>% 
+  group_by(department, job_role) %>% 
+  summarize(Yes = mean(attrition=="Yes")) %>% 
+ dplyr:: arrange(desc(Yes))
+
+
+```
+
+### Q2
+
+Fit a logistic regression model of attrition using all the predictors. (Note: employee_number is NOT a predictor!)
+
+1.  Report in-sample accuracy for this model with a decision threshold of .5.  (Accuracy is defined as the proportion of correct predictions.)
+
+2. Report estimated out-of-sample accuracy.  It will be easiest to get this from caret, using the `train()` function with method = "glm." The information caret prints to the screen, remember, is the cross-validation estimate of the model's out-of-sample performance.
+
+3. Comment on whether the model offers an improvement over predicting with the majority class.
+
+Notes on using caret.  The train function has the following basic arguments:
+- formula: attrition ~ .
+- method: "glm."
+- data: bi (minus employee_number).
+- preProcess: c("center","scale").  Adding this argument will allow you to easily compare the resulting coefficients for effect size. Caret will leave the factor variables alone, transforming only the continuous variables.
+
+
+```{r}
+# Fit glm model using caret (to get cross-validation estimates of model's 
+# out of sample performance)
+
+set.seed(123)
+
+logistic_mod <- glm(ifelse(attrition=="Yes", 1, 0) ~., 
+                    data = bi_clean, 
+                    family = binomial)
+
+caret_mod <- train(attrition ~ ., 
+                   data = dplyr::select(bi_clean, -employee_number), 
+preProcess = c("center", "scale"),
+method = "glm") 
+
+##caret_glm <- train(attrition ~ .,
+     ## method = "glm",
+     ## preProcess = c("center", "scale"), 
+      ##data = dplyr::select(bi, -employee_number))
+
+##summary(caret_glm)
+
+summary(caret_mod)
+
+#1.
+(ifelse(predict(logistic_mod, type = "response") > .5, "Yes", "No") == bi_clean$attrition) %>% 
+  mean
+
+(predict(caret_mod, newdata = bi_clean)==bi_clean$attrition) %>% 
+  mean
+
+#2.
+caret_mod
+
+#3.
+#This model offers a better prediction than the majority class which has about 84% accuracy compared to the model's 87%. The model can adjust to a change in predictors where a majority class can not.  
+
+                
+
+```
+
+> Answer: 
+
+### Q3
+
+The upside of standardizing inputs by centering and scaling is that it allows you to compare coefficient effect sizes easily---they are all on the same scale. (The downside is that they are no longer scaled in the original units, and interpretation changes.) Even though the coefficients are expressed in log odds in this case, after standardization they can still be compared for effect sizes on a relative basis. Note: the `varImp()` function in caret (whose single argument is the model object) is another method for assessing variable impact.  
+
+Notice that some of the standard errors and coefficients in the model above have exploded.  Why has this happened? Multicollinearity!  Some of the levels of the `department` variable are correlated with levels in `job_role`.  For example, since most of the people in the Human Resources department also have a job title of Human Resources, the information from `department` is redundant: by definition, if we know `job_role` we also know `department`.  This is a textbook example of how multicollinearity makes inference difficult---we can't compare the coefficients because some of them are wacky.  The solution?  Remove the redundant variable.  Refit the model without `department.`
+
+1. Which of the centered and scaled predictors has the largest effect size? 
+
+2. Interpret the coefficient with the largest effect size.  Since you are working with standardized coefficients, the interpretation for continuous predictors will be: a 1 unit (that is, after scaling, a 1 standard deviation) increase in x is associated with a coefficient-sized change in the log odds of y, on average, while holding the other predictors constant. Note: caret will leave categorical inputs alone when centering and scaling, so the interpretation of those coefficients will be unchanged.  The coefficient represents the change in the log odds of the outcome associated with an increase from the reference level in the categorical variable. 
+
+```{r}
+# Refit the model
+set.seed(123)
+
+#1.
+(caret_mod <- train(attrition ~ ., # We are modeling leave using all the variables
+      data = dplyr::select(bi_clean, -employee_number, -department), 
+      preProcess= c("center", "scale"),
+      method = "glm")) %>% 
+  summary %>% 
+  coefficients %>% 
+  round(2)
+
+#2. Over time has the largest overall effect size at .89. Employees that work overtime are more likely to leave their job. Overtime is the strongest predictor of attrition. 
+
+
+```
+
+> Answer: 
+
+### Q4
+
+Based on the above logistic regression model (and, specifically, on the coefficient with the largest effect size that you identified above), **how might company policy be changed to reduce employee attrition**?  
+
+1. Describe your proposed policy change.
+2. Estimate and explain the change in churn probability associated with that policy change.
+
+Note:  the  probabilities you will be averaging, and comparing, will be fitted, or in-sample, probabilities.
+
+To calculate fitted probabilities from your model you will need to use the `predict()` function.  Since this model was fitted using the `train()` function, you will need to add the `type = "prob"` argument in the `predict()` function, along with the `newdata` argument. This will return a 2 column data frame with probabilities for each outcome, which must be indexed appropriately to extract the probability of `LEAVE`.
+
+```{r}
+# Logistic regression model
+
+# Current churn probability 
+predict(caret_mod, 
+        newdata = bi_clean, 
+        type = "prob")$Yes %>% 
+  mean
+
+predict(caret_mod, 
+        newdata = mutate(bi_clean, over_time = "No"),
+        type = "prob")$Yes %>% 
+  mean
+
+
+
+# Remember: remove employee_number.
+
+```
+
+> Answer: 
+#1. Decrease or eliminate overtime from employee schedule. 
+#2. Completely eliminating overtime would decrease attrition by 6 points or an estimated 6%. 
+
+### Q5
+
+What should Angelica say in her report? Please include quantitative details from your answers to the questions above.
+
+> Answer: The overall attrition rate from employees is .16 or 16% for 2016. The rate varies by department with human resource workers and labratory technicians leaving at the highest rates. The attrition rate for both is about 23%. As we look at the top predictors of attrition we see that overtime is the #1 predictor at a .89 rate followed by frequent travel at .75. When we eliminate overtime as a coefficient in our model, estimated churn probability for the dataset drops 6 points to about 10%. Job satisfaction has been a positive predictor with an effect size of -.47 showing that good job satisfaction has led to lower attrition. However, I would recommend that BioImplants focuses on the strongest predictors of employee churn for biggest impact.Lowering or eliminating overtime would help with increasing employee retention by a max of about 6%. I would also recommend decreasing travel rates for employees that have to do it a lot. This should also decrease employee churn. 
